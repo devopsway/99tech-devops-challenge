@@ -1,0 +1,96 @@
+name: frontend-deploy
+
+# Deploys the frontend recorded in environments/<env>/ (release.yaml for the
+# bundle, frontend-config.json for its runtime config) to one environment's
+# S3 bucket and CloudFront distribution. Called by deploy.yml; the job waits
+# for a reviewer on the GitHub environment.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  deploy:
+    name: Deploy frontend to ${{ inputs.environment }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      id-token: write
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: frontend-deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+      CONFIG: environments/${{ inputs.environment }}/frontend-config.json
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Load environment
+        run: |
+          settings="environments/$ENVIRONMENT/settings.yaml"
+          {
+            echo "VERSION=$(yq '.frontend.version' "environments/$ENVIRONMENT/release.yaml")"
+            echo "CONFIG_HASH=$(sha256sum "$CONFIG" | cut -c1-64)"
+            echo "BUCKET=$(yq '.frontend.bucket' "$settings")"
+            echo "DISTRIBUTION_ID=$(yq '.frontend.cloudfrontDistributionId' "$settings")"
+            echo "FRONTEND_URL=$(yq '.frontend.url' "$settings")"
+          } >> "$GITHUB_ENV"
+
+      # The live release and config are recorded as metadata on index.html,
+      # the last file each deploy uploads. An approved run for what is already
+      # live does nothing.
+      - name: Check live version
+        id: live
+        run: |
+          live=$(aws s3api head-object --bucket "$BUCKET" --key index.html \
+            --query '[Metadata.release, Metadata.config]' --output text 2>/dev/null | tr '\t' ' ' || true)
+          echo "Git: $VERSION $CONFIG_HASH"
+          echo "live: ${live:-nothing deployed}"
+          [[ "$live" == "$VERSION $CONFIG_HASH" ]] && echo "Already live" || echo "deploy=true" >> "$GITHUB_OUTPUT"
+
+      - name: Fetch release
+        if: steps.live.outputs.deploy == 'true'
+        env:
+          ARTIFACT_BUCKET: ${{ vars.ARTIFACT_BUCKET }}
+        run: |
+          mkdir dist
+          aws s3 cp "s3://$ARTIFACT_BUCKET/frontend/$VERSION.tar.gz" - | tar -xz -C dist
+          cp "$CONFIG" dist/config.json
+
+      # Order matters. Hashed assets go first and are never deleted, so open
+      # tabs on the previous release can still load their chunks. index.html
+      # goes last, so nobody gets an index.html that points at missing files.
+      - name: Upload to S3
+        if: steps.live.outputs.deploy == 'true'
+        run: |
+          aws s3 sync dist/assets "s3://$BUCKET/assets" --cache-control "public, max-age=31536000, immutable"
+          aws s3 sync dist "s3://$BUCKET" --exclude "assets/*" --exclude index.html --cache-control "no-cache"
+          aws s3 cp dist/index.html "s3://$BUCKET/index.html" --cache-control "no-cache" \
+            --metadata "release=$VERSION,config=$CONFIG_HASH"
+
+      - name: Invalidate CloudFront
+        if: steps.live.outputs.deploy == 'true'
+        run: |
+          id=$(aws cloudfront create-invalidation --distribution-id "$DISTRIBUTION_ID" \
+            --paths /index.html /config.json --query Invalidation.Id --output text)
+          aws cloudfront wait invalidation-completed --distribution-id "$DISTRIBUTION_ID" --id "$id"
+
+      - name: Smoke test through CloudFront
+        if: steps.live.outputs.deploy == 'true'
+        run: |
+          curl -fsS "$FRONTEND_URL/" -o /dev/null
+          curl -fsS "$FRONTEND_URL/config.json" | jq -e . > /dev/null

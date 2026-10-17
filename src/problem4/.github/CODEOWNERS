@@ -1,0 +1,6 @@
+# Merging a change to production's desired state deploys it, so a release
+# approver must review it. The main branch ruleset requires code owner review.
+/environments/production/  @example-org/release-approvers
+
+# Pipeline changes can change how anything is deployed.
+/.github/                  @example-org/platform

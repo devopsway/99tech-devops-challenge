@@ -1,0 +1,76 @@
+name: frontend
+
+# Pull requests: lint, test and build.
+# Push to main: the same, then upload the built bundle to the release bucket
+# and record it as staging's desired version in environments/. Deploying is
+# deploy.yml's job.
+
+on:
+  pull_request:
+    paths:
+      - frontend/**
+      - .github/workflows/frontend*.yml
+  push:
+    branches: [main]
+    paths:
+      - frontend/**
+      - .github/workflows/frontend*.yml
+
+permissions: {}
+
+concurrency:
+  group: frontend-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Test, build and publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Install, lint, test, build and audit
+        working-directory: frontend
+        run: |
+          npm ci
+          npm run lint
+          npm test
+          npm run build
+          npm audit --omit=dev --audit-level=high
+
+      - name: Configure AWS credentials
+        if: github.event_name == 'push'
+        uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.PUBLISH_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      # The bundle has no environment-specific values; config.json is added at deploy time.
+      - name: Publish release bundle
+        if: github.event_name == 'push'
+        env:
+          ARTIFACT_BUCKET: ${{ vars.ARTIFACT_BUCKET }}
+        run: |
+          tar -czf bundle.tar.gz -C frontend/dist .
+          aws s3 cp bundle.tar.gz "s3://$ARTIFACT_BUCKET/frontend/$GITHUB_SHA.tar.gz"
+
+  release:
+    name: Release to staging
+    needs: build
+    if: github.event_name == 'push'
+    uses: ./.github/workflows/release-staging.yml
+    with:
+      app: frontend
+    secrets:
+      RELEASE_BOT_PRIVATE_KEY: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}

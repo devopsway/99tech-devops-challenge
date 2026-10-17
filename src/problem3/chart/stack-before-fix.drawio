@@ -1,0 +1,112 @@
+<mxfile host="drawio" version="24.7.17">
+  <diagram id="stack-before-fix" name="Stack before fix">
+    <mxGraphModel dx="1200" dy="760" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1260" pageHeight="760" math="0" shadow="0">
+      <root>
+        <mxCell id="0" />
+        <mxCell id="1" parent="0" />
+
+        <mxCell id="title" value="Problem 3: Docker Compose stack as delivered (before fix)" style="text;html=1;fontSize=18;fontStyle=1;align=left;verticalAlign=middle;" vertex="1" parent="1">
+          <mxGeometry x="30" y="10" width="700" height="30" as="geometry" />
+        </mxCell>
+
+        <mxCell id="host" value="Docker host: docker compose, default bridge network (service names resolved by Docker DNS)" style="rounded=1;arcSize=2;dashed=1;fillColor=#f5f5f5;strokeColor=#666666;fontColor=#333333;verticalAlign=top;align=left;spacingLeft=10;spacingTop=6;fontStyle=1;html=1;" vertex="1" parent="1">
+          <mxGeometry x="200" y="50" width="1030" height="490" as="geometry" />
+        </mxCell>
+
+        <mxCell id="user" value="User / client" style="shape=umlActor;verticalLabelPosition=bottom;verticalAlign=top;html=1;outlineConnect=0;" vertex="1" parent="1">
+          <mxGeometry x="45" y="210" width="40" height="70" as="geometry" />
+        </mxCell>
+
+        <mxCell id="deps" value="&lt;b&gt;docker-compose.yml&lt;/b&gt;: depends_on nginx → api → postgres, redis (start order only)&lt;br&gt;no healthchecks, no restart policy, password hard-coded" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;dashed=1;align=left;spacingLeft=8;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="260" y="90" width="520" height="44" as="geometry" />
+        </mxCell>
+
+        <mxCell id="nginx" value="&lt;b&gt;nginx&lt;/b&gt; (nginx:1.25)&lt;br&gt;listen 80&lt;br&gt;location = / → 200 &quot;Welcome&quot;&lt;br&gt;location /api/ → proxy_pass api:3001" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#dae8fc;strokeColor=#6c8ebf;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="260" y="190" width="210" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="api" value="&lt;b&gt;api&lt;/b&gt; (build ./api, node:20-alpine)&lt;br&gt;express, listens on :3000&lt;br&gt;GET /api/users, GET /status&lt;br&gt;pg Pool + ioredis" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#d5e8d4;strokeColor=#82b366;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="620" y="190" width="220" height="110" as="geometry" />
+        </mxCell>
+
+        <mxCell id="postgres" value="&lt;b&gt;postgres&lt;/b&gt; (postgres:15)&lt;br&gt;:5432, not published&lt;br&gt;max_connections = 100 (default)&lt;br&gt;no volume" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="990" y="110" width="210" height="90" as="geometry" />
+        </mxCell>
+
+        <mxCell id="redis" value="&lt;b&gt;redis&lt;/b&gt; (redis:7)&lt;br&gt;:6379, not published&lt;br&gt;key: last_call" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e1d5e7;strokeColor=#9673a6;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="990" y="300" width="210" height="80" as="geometry" />
+        </mxCell>
+
+        <mxCell id="confd" value="./nginx/conf.d → /etc/nginx/conf.d&lt;br&gt;(mounted: default.conf)" style="shape=note;size=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#6c8ebf;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="260" y="360" width="210" height="46" as="geometry" />
+        </mxCell>
+
+        <mxCell id="nginxconf" value="./nginx/nginx.conf&lt;br&gt;empty file, not mounted" style="shape=note;size=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;dashed=1;fontColor=#777777;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="260" y="440" width="210" height="46" as="geometry" />
+        </mxCell>
+
+        <mxCell id="initsql" value="./postgres/init.sql&lt;br&gt;ALTER SYSTEM SET max_connections = 20&lt;br&gt;not mounted, never runs" style="shape=note;size=12;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#999999;dashed=1;fontColor=#777777;fontSize=11;" vertex="1" parent="1">
+          <mxGeometry x="970" y="430" width="250" height="60" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e-user-nginx" value="HTTP localhost:8080&lt;br&gt;(ports 8080:80)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;strokeWidth=2;fontSize=11;labelBackgroundColor=#ffffff;" edge="1" parent="1" source="user" target="nginx">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e-nginx-api" value="proxy_pass http://api:3001&lt;br&gt;&lt;b&gt;nothing listens on :3001 → 502&lt;/b&gt;" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=cross;endFill=0;strokeWidth=2;strokeColor=#b85450;dashed=1;fontColor=#b85450;fontSize=11;labelBackgroundColor=#f5f5f5;" edge="1" parent="1" source="nginx" target="api">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e-api-pg" value="pg Pool (max 10)&lt;br&gt;no connection timeout" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=11;labelBackgroundColor=#f5f5f5;exitX=1;exitY=0.25;exitDx=0;exitDy=0;" edge="1" parent="1" source="api" target="postgres">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e-api-redis" value="ioredis SET last_call&lt;br&gt;(awaited in request)" style="edgeStyle=orthogonalEdgeStyle;rounded=0;html=1;endArrow=block;fontSize=11;labelBackgroundColor=#f5f5f5;exitX=1;exitY=0.75;exitDx=0;exitDy=0;" edge="1" parent="1" source="api" target="redis">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="e-confd" style="endArrow=none;dashed=1;html=1;strokeColor=#6c8ebf;" edge="1" parent="1" source="confd" target="nginx">
+          <mxGeometry relative="1" as="geometry" />
+        </mxCell>
+
+        <mxCell id="b1" value="1" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#b85450;strokeColor=none;fontColor=#ffffff;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="532" y="268" width="24" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="b4" value="4" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#b85450;strokeColor=none;fontColor=#ffffff;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="456" y="178" width="24" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="b2" value="2" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#b85450;strokeColor=none;fontColor=#ffffff;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="772" y="178" width="24" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="b6" value="6" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#b85450;strokeColor=none;fontColor=#ffffff;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="800" y="178" width="24" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="b5" value="5" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#b85450;strokeColor=none;fontColor=#ffffff;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="940" y="356" width="24" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="b3" value="3" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#b85450;strokeColor=none;fontColor=#ffffff;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="740" y="78" width="24" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="b7" value="7" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#b85450;strokeColor=none;fontColor=#ffffff;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="768" y="78" width="24" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="b8a" value="8" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#b85450;strokeColor=none;fontColor=#ffffff;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="458" y="428" width="24" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="b8b" value="8" style="ellipse;whiteSpace=wrap;html=1;aspect=fixed;fillColor=#b85450;strokeColor=none;fontColor=#ffffff;fontStyle=1;fontSize=12;" vertex="1" parent="1">
+          <mxGeometry x="1208" y="418" width="24" height="24" as="geometry" />
+        </mxCell>
+
+        <mxCell id="legend-title" value="Issues (numbers match SOLUTION.md)" style="text;html=1;fontStyle=1;fontSize=13;align=left;verticalAlign=middle;fontColor=#b85450;" vertex="1" parent="1">
+          <mxGeometry x="200" y="555" width="400" height="24" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-left" value="&lt;b&gt;1&lt;/b&gt;  nginx proxies to :3001, the API listens on :3000: every /api/ call returns 502.&lt;br&gt;&lt;b&gt;2&lt;/b&gt;  No pool.on(&#39;error&#39;): a Postgres restart crashes the API process.&lt;br&gt;&lt;b&gt;3&lt;/b&gt;  No restart policy: a crashed container stays down.&lt;br&gt;&lt;b&gt;4&lt;/b&gt;  nginx resolves &quot;api&quot; once at startup: a recreated API (new IP) gets 502s." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=12;spacingTop=2;" vertex="1" parent="1">
+          <mxGeometry x="200" y="582" width="510" height="110" as="geometry" />
+        </mxCell>
+        <mxCell id="legend-right" value="&lt;b&gt;5&lt;/b&gt;  ioredis queues and retries while Redis is down: requests hang over 90 s.&lt;br&gt;&lt;b&gt;6&lt;/b&gt;  release() skipped on query error, no pool timeout: leaked clients exhaust the pool.&lt;br&gt;&lt;b&gt;7&lt;/b&gt;  depends_on waits for container start only, no health checks.&lt;br&gt;&lt;b&gt;8&lt;/b&gt;  init.sql and nginx.conf are never mounted: dead, misleading config." style="text;html=1;whiteSpace=wrap;align=left;verticalAlign=top;fontSize=12;spacingTop=2;" vertex="1" parent="1">
+          <mxGeometry x="720" y="582" width="510" height="110" as="geometry" />
+        </mxCell>
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

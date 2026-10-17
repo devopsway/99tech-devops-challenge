@@ -1,0 +1,105 @@
+name: set-version
+
+# Manual form for deploying a specific version of one app: pick the
+# environment, the app and a commit SHA. The workflow checks that the release
+# exists, then the release bot opens a pull request that sets the version in
+# environments/<env>/release.yaml. Merging it triggers deploy.yml as usual, so
+# Git stays the source of truth and every deploy still needs approval.
+# Use it for rollbacks to a specific version or to pin an older release.
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment
+        type: choice
+        options: [staging, production]
+        required: true
+      app:
+        description: App
+        type: choice
+        options: [backend, frontend]
+        required: true
+      version:
+        description: Full commit SHA of a release built on main
+        type: string
+        required: true
+
+run-name: Set ${{ inputs.app }} in ${{ inputs.environment }} to ${{ inputs.version }}
+
+permissions: {}
+
+jobs:
+  set-version:
+    name: Open version PR
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Writes go through the release bot token, so the pull request triggers checks.
+    permissions:
+      contents: read
+      id-token: write
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+      APP: ${{ inputs.app }}
+      VERSION: ${{ inputs.version }}
+      FILE: environments/${{ inputs.environment }}/release.yaml
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Check the version is a commit on main
+        run: |
+          [[ "$VERSION" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::version must be a full 40-character commit SHA"; exit 1; }
+          git merge-base --is-ancestor "$VERSION" HEAD 2>/dev/null ||
+            { echo "::error::$VERSION is not a commit on main"; exit 1; }
+          current=$(yq ".$APP.version" "$FILE")
+          [[ "$current" != "$VERSION" ]] || { echo "::error::$ENVIRONMENT already has $APP $VERSION in Git"; exit 1; }
+          echo "CURRENT=$current" >> "$GITHUB_ENV"
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.READONLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Check the release was published
+        env:
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          ARTIFACT_BUCKET: ${{ vars.ARTIFACT_BUCKET }}
+        run: |
+          if [[ "$APP" == backend ]]; then
+            aws ecr describe-images --repository-name "$ECR_REPOSITORY" --image-ids imageTag="$VERSION" > /dev/null ||
+              { echo "::error::no backend image $VERSION in $ECR_REPOSITORY"; exit 1; }
+          else
+            aws s3api head-object --bucket "$ARTIFACT_BUCKET" --key "frontend/$VERSION.tar.gz" > /dev/null ||
+              { echo "::error::no frontend bundle $VERSION in $ARTIFACT_BUCKET"; exit 1; }
+          fi
+
+      - name: Set version
+        run: yq -i ".$APP.version = \"$VERSION\"" "$FILE"
+
+      - name: Get release bot token
+        id: bot
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ steps.bot.outputs.token }}
+          branch: set-version/${{ inputs.environment }}-${{ inputs.app }}
+          add-paths: ${{ env.FILE }}
+          commit-message: Set ${{ inputs.app }} in ${{ inputs.environment }} to ${{ inputs.version }}
+          title: Set ${{ inputs.app }} in ${{ inputs.environment }} to ${{ inputs.version }}
+          body: |
+            Requested by @${{ github.actor }} through the set-version workflow.
+
+            - ${{ inputs.app }} in ${{ inputs.environment }}: `${{ env.CURRENT }}` to `${{ inputs.version }}` ([changes](https://github.com/${{ github.repository }}/compare/${{ env.CURRENT }}...${{ inputs.version }}))
+
+            Merging this pull request starts a ${{ inputs.environment }} deploy, which needs approval.
+          labels: release

@@ -1,0 +1,14 @@
+# Non-secret identifiers of staging's AWS resources, read by the deploy and
+# reconcile workflows. Credentials are not here: deploys assume the role set
+# on the GitHub environment, reconcile a read-only role.
+backend:
+  url: https://api.staging.example.com
+  autoScalingGroup: web-product-backend-staging
+  launchTemplateId: lt-0123456789abcdef0
+  rollbackAlarms:
+    - web-product-backend-staging-5xx-rate
+    - web-product-backend-staging-unhealthy-hosts
+frontend:
+  url: https://staging.example.com
+  bucket: web-product-frontend-staging
+  cloudfrontDistributionId: E2STAGINGEXAMPLE

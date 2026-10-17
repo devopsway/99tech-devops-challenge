@@ -1,0 +1,7 @@
+# Desired state of staging. The release bot sets each version after a
+# successful build on main; deploy.yml applies it once someone approves.
+# Versions are full commit SHAs of releases already published from main.
+backend:
+  version: d514e60a76ffb2bce8eaf1cc70e77de213aef597
+frontend:
+  version: d514e60a76ffb2bce8eaf1cc70e77de213aef597

@@ -1,0 +1,118 @@
+name: deploy
+
+# The only workflow that changes AWS. It deploys what environments/ in Git
+# says, and every deploy job waits for a reviewer on its GitHub environment
+# (staging and production both require one).
+#
+# - Push to main changing environments/: deploy the apps and environments
+#   whose desired state changed (a release bot commit for staging, a merged
+#   promotion or revert pull request for production).
+# - Manual run: deploy the chosen environment and apps from Git, for example
+#   to re-sync after drift.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - environments/*/release.yaml
+      - environments/*/frontend-config.json
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to deploy from Git
+        type: choice
+        options: [staging, production]
+        required: true
+      app:
+        description: App to deploy
+        type: choice
+        options: [both, backend, frontend]
+        default: both
+
+permissions: {}
+
+jobs:
+  plan:
+    name: Plan
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    outputs:
+      staging-backend: ${{ steps.plan.outputs.staging-backend }}
+      staging-frontend: ${{ steps.plan.outputs.staging-frontend }}
+      production-backend: ${{ steps.plan.outputs.production-backend }}
+      production-frontend: ${{ steps.plan.outputs.production-frontend }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      # Compare desired state before and after the push, so a commit that only
+      # touches staging never asks anyone to approve a production deploy.
+      - name: Work out what to deploy
+        id: plan
+        env:
+          EVENT: ${{ github.event_name }}
+          BEFORE: ${{ github.event.before }}
+          INPUT_ENVIRONMENT: ${{ inputs.environment }}
+          INPUT_APP: ${{ inputs.app }}
+        run: |
+          changed() { # environment app
+            local release="environments/$1/release.yaml" config="environments/$1/frontend-config.json"
+            if [[ "$EVENT" == workflow_dispatch ]]; then
+              [[ "$INPUT_ENVIRONMENT" == "$1" && ( "$INPUT_APP" == both || "$INPUT_APP" == "$2" ) ]]
+              return
+            fi
+            git cat-file -e "$BEFORE:$release" 2>/dev/null || return 0
+            [[ "$(git show "$BEFORE:$release" | yq ".$2.version")" != "$(yq ".$2.version" "$release")" ]] && return 0
+            [[ "$2" == frontend ]] && ! git diff --quiet "$BEFORE" HEAD -- "$config"
+          }
+          for env in staging production; do
+            for app in backend frontend; do
+              if changed "$env" "$app"; then result=true; else result=false; fi
+              echo "$env $app: $result"
+              echo "$env-$app=$result" >> "$GITHUB_OUTPUT"
+            done
+          done
+
+  staging-backend:
+    needs: plan
+    if: needs.plan.outputs.staging-backend == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/backend-deploy.yml
+    with:
+      environment: staging
+
+  staging-frontend:
+    needs: plan
+    if: needs.plan.outputs.staging-frontend == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/frontend-deploy.yml
+    with:
+      environment: staging
+
+  production-backend:
+    needs: plan
+    if: needs.plan.outputs.production-backend == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/backend-deploy.yml
+    with:
+      environment: production
+
+  production-frontend:
+    needs: plan
+    if: needs.plan.outputs.production-frontend == 'true'
+    permissions:
+      contents: read
+      id-token: write
+    uses: ./.github/workflows/frontend-deploy.yml
+    with:
+      environment: production

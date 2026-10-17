@@ -1,0 +1,4 @@
+{
+  "environment": "staging",
+  "apiBaseUrl": "https://api.staging.example.com"
+}

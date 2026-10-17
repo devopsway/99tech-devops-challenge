@@ -1,0 +1,122 @@
+name: backend-deploy
+
+# Deploys the backend version recorded in environments/<env>/release.yaml to
+# one environment with a zero-downtime Auto Scaling instance refresh. Called
+# by deploy.yml; the job waits for a reviewer on the GitHub environment.
+
+on:
+  workflow_call:
+    inputs:
+      environment:
+        type: string
+        required: true
+
+permissions: {}
+
+jobs:
+  deploy:
+    name: Deploy backend to ${{ inputs.environment }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      id-token: write
+    environment: ${{ inputs.environment }}
+    concurrency:
+      group: backend-deploy-${{ inputs.environment }}
+      cancel-in-progress: false
+    env:
+      ENVIRONMENT: ${{ inputs.environment }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Load environment
+        run: |
+          settings="environments/$ENVIRONMENT/settings.yaml"
+          {
+            echo "VERSION=$(yq '.backend.version' "environments/$ENVIRONMENT/release.yaml")"
+            echo "ASG_NAME=$(yq '.backend.autoScalingGroup' "$settings")"
+            echo "LAUNCH_TEMPLATE_ID=$(yq '.backend.launchTemplateId' "$settings")"
+            echo "ROLLBACK_ALARMS=$(yq '.backend.rollbackAlarms | join(",")' "$settings")"
+            echo "BACKEND_URL=$(yq '.backend.url' "$settings")"
+          } >> "$GITHUB_ENV"
+
+      # The live release is recorded in the description of the launch template
+      # version the Auto Scaling group runs ("backend <sha>"). An approved run
+      # for a version that is already live does nothing.
+      - name: Check live version
+        id: live
+        run: |
+          current=$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$ASG_NAME" \
+            --query 'AutoScalingGroups[0].LaunchTemplate.Version' --output text)
+          live=$(aws ec2 describe-launch-template-versions --launch-template-id "$LAUNCH_TEMPLATE_ID" \
+            --versions "$current" --query 'LaunchTemplateVersions[0].VersionDescription' --output text)
+          echo "Git: $VERSION, live: ${live#backend }"
+          [[ "${live#backend }" == "$VERSION" ]] && echo "Already live" || echo "deploy=true" >> "$GITHUB_OUTPUT"
+
+      # A new launch template version whose user data runs the release's image,
+      # pinned by digest. Everything else comes from the template's default
+      # version, which infrastructure code owns.
+      - name: Create launch template version
+        id: template
+        if: steps.live.outputs.deploy == 'true'
+        env:
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+        run: |
+          repo_uri=$(aws ecr describe-repositories --repository-names "$ECR_REPOSITORY" \
+            --query 'repositories[0].repositoryUri' --output text)
+          digest=$(aws ecr describe-images --repository-name "$ECR_REPOSITORY" \
+            --image-ids imageTag="$VERSION" --query 'imageDetails[0].imageDigest' --output text)
+          sed -e "s|@IMAGE_URI@|$repo_uri@$digest|" -e "s|@APP_VERSION@|$VERSION|" \
+            -e "s|@ENVIRONMENT@|$ENVIRONMENT|" deploy/backend/user-data.sh > user-data.sh
+          base=$(aws ec2 describe-launch-templates --launch-template-ids "$LAUNCH_TEMPLATE_ID" \
+            --query 'LaunchTemplates[0].DefaultVersionNumber' --output text)
+          version=$(aws ec2 create-launch-template-version --launch-template-id "$LAUNCH_TEMPLATE_ID" \
+            --source-version "$base" --version-description "backend $VERSION" \
+            --launch-template-data "{\"UserData\":\"$(base64 -w0 user-data.sh)\"}" \
+            --query 'LaunchTemplateVersion.VersionNumber' --output text)
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # Min 100% / max 200% healthy: each replacement must pass the ALB health
+      # check before an old instance is drained and terminated, so capacity
+      # never drops. If an alarm fires or the refresh fails, Auto Scaling
+      # restores the previous launch template version by itself, and the next
+      # reconcile run reports that AWS no longer matches Git.
+      - name: Instance refresh
+        if: steps.live.outputs.deploy == 'true'
+        env:
+          TEMPLATE_VERSION: ${{ steps.template.outputs.version }}
+        run: |
+          prefs=$(jq -cn --arg alarms "$ROLLBACK_ALARMS" \
+            '{MinHealthyPercentage: 100, MaxHealthyPercentage: 200, AutoRollback: true,
+              AlarmSpecification: {Alarms: ($alarms | split(","))}}')
+          id=$(aws autoscaling start-instance-refresh --auto-scaling-group-name "$ASG_NAME" \
+            --desired-configuration "{\"LaunchTemplate\":{\"LaunchTemplateId\":\"$LAUNCH_TEMPLATE_ID\",\"Version\":\"$TEMPLATE_VERSION\"}}" \
+            --preferences "$prefs" --query InstanceRefreshId --output text)
+          while true; do
+            status=$(aws autoscaling describe-instance-refreshes --auto-scaling-group-name "$ASG_NAME" \
+              --instance-refresh-ids "$id" --query 'InstanceRefreshes[0].Status' --output text)
+            echo "instance refresh $id: $status"
+            case "$status" in
+              Successful) break ;;
+              Pending | InProgress | Baking | Cancelling | RollbackInProgress) sleep 30 ;;
+              *) exit 1 ;; # Failed, Cancelled, RollbackSuccessful, RollbackFailed
+            esac
+          done
+
+      - name: Smoke test through the load balancer
+        if: steps.live.outputs.deploy == 'true'
+        run: |
+          for _ in $(seq 30); do
+            curl -fsS "$BACKEND_URL/healthz" | grep -q "$VERSION" && exit 0
+            sleep 2
+          done
+          echo "$BACKEND_URL/healthz does not report $VERSION"
+          exit 1

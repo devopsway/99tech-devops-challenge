@@ -1,0 +1,193 @@
+name: reconcile
+
+# Read-only: compares environments/ in Git with what is live in AWS, reports
+# it, and never deploys anything (that is deploy.yml, behind approval).
+#
+# - Pull request touching environments/: validate the files.
+# - Hourly, after every deploy run, and on demand: build a status table of
+#   desired vs live versions, notify Slack when anything is out of sync, and
+#   open or update the promotion pull request when staging runs versions that
+#   production does not have yet.
+
+on:
+  pull_request:
+    paths:
+      - environments/**
+  schedule:
+    - cron: "17 * * * *"
+  workflow_run:
+    workflows: [deploy]
+    types: [completed]
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  validate:
+    name: Validate environments
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Check release files, settings and configs
+        run: |
+          for env in staging production; do
+            for app in backend frontend; do
+              version=$(yq ".$app.version" "environments/$env/release.yaml")
+              [[ "$version" =~ ^[0-9a-f]{40}$ ]] || { echo "::error::$env $app version is not a commit SHA: $version"; exit 1; }
+            done
+            yq -e '.backend.autoScalingGroup and .frontend.bucket' "environments/$env/settings.yaml" > /dev/null
+            jq -e . "environments/$env/frontend-config.json" > /dev/null
+          done
+
+  status:
+    name: Compare Git with AWS
+    needs: validate
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    outputs:
+      out-of-sync: ${{ steps.compare.outputs.out-of-sync }}
+      promotable: ${{ steps.compare.outputs.promotable }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      # A read-only role: it can describe the Auto Scaling groups and launch
+      # templates and read object metadata in the site buckets, nothing else.
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.READONLY_ROLE_ARN }}
+          aws-region: ${{ vars.AWS_REGION }}
+
+      - name: Compare desired and live versions
+        id: compare
+        run: |
+          live_backend() { # environment
+            local asg lt current
+            asg=$(yq '.backend.autoScalingGroup' "environments/$1/settings.yaml")
+            lt=$(yq '.backend.launchTemplateId' "environments/$1/settings.yaml")
+            current=$(aws autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$asg" \
+              --query 'AutoScalingGroups[0].LaunchTemplate.Version' --output text)
+            aws ec2 describe-launch-template-versions --launch-template-id "$lt" --versions "$current" \
+              --query 'LaunchTemplateVersions[0].VersionDescription' --output text | sed 's/^backend //'
+          }
+          live_frontend() { # environment
+            aws s3api head-object --bucket "$(yq '.frontend.bucket' "environments/$1/settings.yaml")" \
+              --key index.html --query 'Metadata.release' --output text 2>/dev/null || echo none
+          }
+
+          out_of_sync=""
+          staging_in_sync=true
+          promotion_pending=false
+          {
+            echo "| Environment | App | Git | Live | Status |"
+            echo "|---|---|---|---|---|"
+          } >> "$GITHUB_STEP_SUMMARY"
+          for env in staging production; do
+            for app in backend frontend; do
+              desired=$(yq ".$app.version" "environments/$env/release.yaml")
+              live=$("live_$app" "$env")
+              if [[ "$desired" == "$live" ]]; then
+                status="in sync"
+              else
+                status="out of sync"
+                out_of_sync+="- $env $app: Git ${desired::12}, live ${live::12}"$'\n'
+                [[ "$env" == staging ]] && staging_in_sync=false
+              fi
+              if [[ "$env" == staging && "$desired" != "$(yq ".$app.version" environments/production/release.yaml)" ]]; then
+                promotion_pending=true
+              fi
+              echo "| $env | $app | \`${desired::12}\` | \`${live::12}\` | $status |" >> "$GITHUB_STEP_SUMMARY"
+            done
+          done
+
+          {
+            echo "out-of-sync<<EOF"
+            printf '%s' "$out_of_sync"
+            echo "EOF"
+            # Only offer versions that are actually live and in sync in staging.
+            echo "promotable=$([[ $staging_in_sync == true && $promotion_pending == true ]] && echo true || echo false)"
+          } >> "$GITHUB_OUTPUT"
+
+  notify:
+    name: Notify Slack
+    needs: status
+    if: needs.status.outputs.out-of-sync != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      # Out of sync means a deploy is waiting for approval, a deploy failed or
+      # rolled back, or someone changed AWS by hand.
+      - name: Post to Slack
+        env:
+          SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
+          OUT_OF_SYNC: ${{ needs.status.outputs.out-of-sync }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          text=$(printf 'AWS does not match environments/ in Git:\n%s\n<%s|Details>' "$OUT_OF_SYNC" "$RUN_URL")
+          curl -fsS -X POST -H 'Content-Type: application/json' \
+            --data "$(jq -cn --arg text "$text" '{text: $text}')" "$SLACK_WEBHOOK_URL"
+
+  promote:
+    name: Open promotion PR
+    needs: status
+    if: needs.status.outputs.promotable == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    # Writes go through the release bot token, so the pull request triggers checks.
+    permissions:
+      contents: read
+    steps:
+      - name: Get release bot token
+        id: bot
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          permission-contents: write
+          permission-pull-requests: write
+
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Copy staging versions to production
+        id: diff
+        run: |
+          {
+            echo "summary<<EOF"
+            for app in backend frontend; do
+              from=$(yq ".$app.version" environments/production/release.yaml)
+              to=$(yq ".$app.version" environments/staging/release.yaml)
+              yq -i ".$app.version = \"$to\"" environments/production/release.yaml
+              if [[ "$from" != "$to" ]]; then
+                echo "- $app: [\`${from::12}\` to \`${to::12}\`](https://github.com/$GITHUB_REPOSITORY/compare/$from...$to)"
+              fi
+            done
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      # An open promotion pull request is updated in place.
+      - uses: peter-evans/create-pull-request@v8
+        with:
+          token: ${{ steps.bot.outputs.token }}
+          branch: release/production
+          add-paths: environments/production/release.yaml
+          commit-message: Promote staging to production
+          title: Promote staging to production
+          body: |
+            These versions are live in staging and passed its smoke tests.
+            Merging this pull request starts a production deploy, which needs approval.
+
+            ${{ steps.diff.outputs.summary }}
+          labels: release

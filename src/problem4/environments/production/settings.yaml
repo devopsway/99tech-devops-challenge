@@ -1,0 +1,14 @@
+# Non-secret identifiers of production's AWS resources, read by the deploy and
+# reconcile workflows. Credentials are not here: deploys assume the role set
+# on the GitHub environment, reconcile a read-only role.
+backend:
+  url: https://api.example.com
+  autoScalingGroup: web-product-backend-production
+  launchTemplateId: lt-0fedcba9876543210
+  rollbackAlarms:
+    - web-product-backend-production-5xx-rate
+    - web-product-backend-production-unhealthy-hosts
+frontend:
+  url: https://www.example.com
+  bucket: web-product-frontend-production
+  cloudfrontDistributionId: E1PRODEXAMPLE

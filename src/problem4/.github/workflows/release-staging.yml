@@ -1,0 +1,67 @@
+name: release-staging
+
+# Records a freshly published release as the desired state of staging by
+# committing its SHA to environments/staging/release.yaml. The commit is made
+# with the release bot's GitHub App token, because pushes made with
+# GITHUB_TOKEN do not trigger other workflows; this one triggers deploy.yml,
+# which waits for approval before deploying to staging.
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: backend or frontend
+        type: string
+        required: true
+    secrets:
+      RELEASE_BOT_PRIVATE_KEY:
+        required: true
+
+permissions: {}
+
+jobs:
+  release:
+    name: Set ${{ inputs.app }} version in staging
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    concurrency:
+      group: release-staging
+      cancel-in-progress: false
+    env:
+      APP: ${{ inputs.app }}
+      FILE: environments/staging/release.yaml
+    steps:
+      - name: Get release bot token
+        id: bot
+        uses: actions/create-github-app-token@v3
+        with:
+          client-id: ${{ vars.RELEASE_BOT_CLIENT_ID }}
+          private-key: ${{ secrets.RELEASE_BOT_PRIVATE_KEY }}
+          permission-contents: write
+
+      - uses: actions/checkout@v7
+        with:
+          ref: main
+          fetch-depth: 0
+          token: ${{ steps.bot.outputs.token }}
+
+      # Builds can finish out of order. Only move staging forward: skip this
+      # release if staging already runs a newer commit.
+      - name: Commit new version
+        env:
+          BOT: ${{ steps.bot.outputs.app-slug }}[bot]
+        run: |
+          current=$(yq ".$APP.version" "$FILE")
+          if [[ "$current" == "$GITHUB_SHA" ]]; then
+            echo "staging already has $APP $GITHUB_SHA"
+            exit 0
+          fi
+          if git merge-base --is-ancestor "$GITHUB_SHA" "$current" 2>/dev/null; then
+            echo "::notice::staging already runs a newer $APP ($current); skipping $GITHUB_SHA"
+            exit 0
+          fi
+          yq -i ".$APP.version = \"$GITHUB_SHA\"" "$FILE"
+          git config user.name "$BOT"
+          git config user.email "$BOT@users.noreply.github.com"
+          git commit -am "Deploy $APP ${GITHUB_SHA::12} to staging"
+          git push || { git pull --rebase && git push; }

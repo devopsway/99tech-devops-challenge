@@ -1,0 +1,8 @@
+# Desired state of production. Changed only by pull request (reconcile opens
+# promotion PRs); merging starts a deploy that needs approval. Roll back with
+# git revert.
+# Versions are full commit SHAs of releases already published from main.
+backend:
+  version: d514e60a76ffb2bce8eaf1cc70e77de213aef597
+frontend:
+  version: d514e60a76ffb2bce8eaf1cc70e77de213aef597
