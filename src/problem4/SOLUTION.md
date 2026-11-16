@@ -4,7 +4,7 @@ Both apps deploy from Git. Each environment's desired state, meaning which commi
 
 In short: CI tests every pull request and publishes one immutable release from `main`. A release bot records each new release as staging's desired version. `deploy.yml` is the only workflow that touches AWS, and each of its deploy jobs waits for a reviewer. `reconcile.yml` is read-only: it compares what's live with what Git says, posts drift to Slack, and opens the pull request that promotes staging to production. Both deploys are zero-downtime.
 
-![Pipelines and deploy targets](chart/pipelines.svg)
+![Pipelines and deploy targets](chart/pipelines.png)
 
 Source: [`chart/pipelines.drawio`](chart/pipelines.drawio).
 
@@ -48,7 +48,7 @@ Runtime secrets stay in SSM Parameter Store and the instances read them at boot.
 
 The workflow files and how they call each other (source: [`chart/workflows.drawio`](chart/workflows.drawio)):
 
-![How the workflow files relate](chart/workflows.svg)
+![How the workflow files relate](chart/workflows.png)
 
 | File | Triggered by | Purpose |
 |---|---|---|

@@ -27,11 +27,11 @@ The editable source is [`chart/architecture.drawio`](chart/architecture.drawio),
 
 Page 1 shows where everything runs, across three AZs:
 
-![Deployment overview](chart/architecture-overview.svg)
+![Deployment overview](chart/architecture-overview.png)
 
 Page 2 shows how orders and market data move between services. The red path is order placement, which the latency target covers:
 
-![Request and data flow](chart/order-flow.svg)
+![Request and data flow](chart/order-flow.png)
 
 Page 3, the EKS add-ons, is under [Cluster platform](#cluster-platform).
 
@@ -88,7 +88,7 @@ There are two node pools:
 
 These add-ons run in the cluster and manage the AWS services around it:
 
-![EKS platform](chart/eks-platform.svg)
+![EKS platform](chart/eks-platform.png)
 
 | Concern | How it works |
 |---|---|

@@ -35,7 +35,7 @@ Causes B and D are files that were deleted but are still held open by NGINX. The
 
 The flowchart goes from the alert to a root cause. Source: [`chart/troubleshooting.drawio`](chart/troubleshooting.drawio).
 
-![Triage and diagnosis flowchart](chart/triage.svg)
+![Triage and diagnosis flowchart](chart/triage.png)
 
 | Check | What it tells you |
 |---|---|
@@ -64,7 +64,7 @@ On a host that only runs NGINX, A and B are the most likely. D is the one that h
 
 Page 2 of the chart lays out the same causes as check, analyse, recover and prevent steps:
 
-![Check, analyse, recover and prevent for each cause](chart/handling.svg)
+![Check, analyse, recover and prevent for each cause](chart/handling.png)
 
 ## What a full disk does to NGINX
 

@@ -8,7 +8,7 @@ The repository files are left as delivered. Each section below gives the problem
 
 The four services, how they connect, and where each problem sits. The red numbers match the sections below. Source: [`chart/stack-before-fix.drawio`](chart/stack-before-fix.drawio).
 
-![Docker Compose stack before fix](chart/stack-before-fix.svg)
+![Docker Compose stack before fix](chart/stack-before-fix.png)
 
 ## How I diagnosed it
 

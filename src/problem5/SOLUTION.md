@@ -30,11 +30,11 @@ The editable source is [`chart/security.drawio`](chart/security.drawio). Green m
 
 **Secured request and data flow:** who can reach what, and with which identity.
 
-![Secured request and data flow](chart/secured-flow.svg)
+![Secured request and data flow](chart/secured-flow.png)
 
 **Cluster platform and supply chain:** how an image gets into the cluster, and what watches it at runtime.
 
-![Cluster platform and supply chain](chart/secured-platform.svg)
+![Cluster platform and supply chain](chart/secured-platform.png)
 
 ### Summary of changes
 
